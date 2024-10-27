@@ -1,0 +1,229 @@
+import re
+
+def tokenize(code):
+    tokens = []
+    token_specification = [
+        ('NUMBER',    r'\d+(\.\d*)?'),    
+        ('ASSIGN',    r'->'),              
+        ('ID',        r'[A-Za-ząćęłńóśźżĄĆĘŁŃÓŚŹŻ_]\w*'),  
+        ('IF',        r'if'),             
+        ('ELSE',      r'else'),           
+        ('OP',        r'[+\-*/]'),        
+        ('GT',        r'>'),               # Add this line for greater than
+        ('LT',        r'<'),               # Add this line for less than
+        ('GE',        r'>='),              # Add this line for greater than or equal to
+        ('LE',        r'<='),              # Add this line for less than or equal to
+        ('EQ',        r'=='),              # Add this line for equality
+        ('LPAREN',    r'\('),             
+        ('RPAREN',    r'\)'),             
+        ('LBRACE',    r'\{'),             
+        ('RBRACE',    r'\}'),             
+        ('STRING',    r'"([^"\\]*(\\.[^"\\]*)*)?"'),  
+        ('PRINT',     r'print'),          
+        ('SEMICOLON', r';'),              
+        ('SKIP',      r'[ \t]+'),         
+        ('MISMATCH',  r'.'),              
+    ]
+    
+    tok_regex = '|'.join(f'(?P<{pair[0]}>{pair[1]})' for pair in token_specification)
+    
+    for mo in re.finditer(tok_regex, code):
+        kind = mo.lastgroup
+        value = mo.group()
+        if kind == 'NUMBER':
+            value = float(value) if '.' in value else int(value)
+        elif kind == 'ID' and value == 'print':
+            kind = 'PRINT'
+        elif kind == 'IF' and value == 'if':
+            kind = 'IF'
+        elif kind == 'ELSE' and value == 'else':
+            kind = 'ELSE'
+        elif kind == 'STRING':
+            value = value[1:-1]  # Remove quotes
+        elif kind == 'SKIP':
+            continue
+        elif kind == 'MISMATCH':
+            raise RuntimeError(f'Unexpected character: {value}')
+        tokens.append((kind, value))
+    return tokens
+
+
+
+def parse(tokens):
+    instructions = []
+    i = 0
+    while i < len(tokens):
+        token_type, token_value = tokens[i]
+
+        print(f'Parsing token: {token_type}, Value: {token_value}')  # Debugging output
+
+        # Handle variable assignment
+        if token_type == 'ID' and i + 1 < len(tokens) and tokens[i + 1][0] == 'ASSIGN':
+            var_name = token_value
+            i += 2
+            expr = []
+            while (i < len(tokens) and 
+                   not (tokens[i][0] == 'ID' and i + 1 < len(tokens) and tokens[i + 1][0] == 'ASSIGN') and 
+                   tokens[i][0] != 'PRINT' and tokens[i][0] != 'IF'):
+                expr.append(tokens[i])
+                i += 1
+            instructions.append({'type': 'assign', 'var': var_name, 'expr': expr})
+            continue
+
+        # Handle print statement
+        elif token_type == 'PRINT':
+            i += 1
+            if i < len(tokens) and tokens[i][0] == 'LPAREN':
+                i += 1
+                expr = []
+                while i < len(tokens) and tokens[i][0] != 'RPAREN':
+                    expr.append(tokens[i])
+                    i += 1
+                if i < len(tokens) and tokens[i][0] == 'RPAREN':
+                    i += 1  # Skip the closing parenthesis
+                else:
+                    raise SyntaxError("Expected closing parenthesis ')' after 'print'")
+                instructions.append({'type': 'print', 'expr': expr})
+            else:
+                raise SyntaxError("Expected opening parenthesis '(' after 'print'")
+
+        # Handle if statement
+        elif token_type == 'IF':
+            i += 1
+            if i < len(tokens) and tokens[i][0] == 'LPAREN':
+                i += 1
+                condition = []
+                while i < len(tokens) and tokens[i][0] != 'RPAREN':
+                    condition.append(tokens[i])
+                    i += 1
+                if i < len(tokens) and tokens[i][0] == 'RPAREN':
+                    i += 1  # Skip the closing parenthesis
+                else:
+                    raise SyntaxError("Expected closing parenthesis ')' after 'if'")
+                
+                if_block = []
+                if i < len(tokens) and tokens[i][0] == 'LBRACE':
+                    i += 1
+                    while i < len(tokens) and tokens[i][0] != 'RBRACE':
+                        if_block.append(tokens[i])
+                        i += 1
+                    if i < len(tokens) and tokens[i][0] == 'RBRACE':
+                        i += 1  # Skip the closing brace
+                    else:
+                        raise SyntaxError("Expected closing brace '}' after 'if' block")
+                else:
+                    raise SyntaxError("Expected opening brace '{' after 'if'")
+
+                # Handle else block (if present)
+                if i < len(tokens) and tokens[i][0] == 'ELSE':
+                    i += 1
+                    if i < len(tokens) and tokens[i][0] == 'LBRACE':
+                        i += 1
+                        else_block = []
+                        while i < len(tokens) and tokens[i][0] != 'RBRACE':
+                            else_block.append(tokens[i])
+                            i += 1
+                        if i < len(tokens) and tokens[i][0] == 'RBRACE':
+                            i += 1  # Skip the closing brace
+                        else:
+                            raise SyntaxError("Expected closing brace '}' after 'else' block")
+                        instructions.append({'type': 'if', 'condition': condition, 'if_block': if_block, 'else_block': else_block})
+                    else:
+                        raise SyntaxError("Expected opening brace '{' after 'else'")
+
+                else:
+                    instructions.append({'type': 'if', 'condition': condition, 'if_block': if_block})
+            else:
+                raise SyntaxError("Expected opening parenthesis '(' after 'if'")
+
+        else:
+            raise SyntaxError(f"Unexpected token: {token_value}")
+
+        i += 1
+
+    return instructions
+
+
+def eval_expression(expr, variables):
+    stack = []
+    operators = []
+
+    for token_type, token_value in expr:
+        if token_type == 'NUMBER':
+            stack.append(token_value)
+        elif token_type == 'ID':
+            stack.append(variables[token_value])
+        elif token_type == 'STRING':
+            stack.append(token_value)
+        elif token_type == 'OP':
+            while (operators and operators[-1] in ('*', '/') and token_value in ('+', '-')) or \
+                  (operators and operators[-1] == token_value):
+                right = stack.pop()
+                left = stack.pop()
+                op = operators.pop()
+                if op == '+':
+                    stack.append(left + right)
+                elif op == '-':
+                    stack.append(left - right)
+                elif op == '*':
+                    stack.append(left * right)
+                elif op == '/':
+                    stack.append(left / right)
+                elif op == '>':
+                    stack.append(left > right)  # Handle greater than comparison
+            operators.append(token_value)
+
+    while operators:
+        right = stack.pop()
+        left = stack.pop()
+        op = operators.pop()
+        if op == '+':
+            stack.append(left + right)
+        elif op == '-':
+            stack.append(left - right)
+        elif op == '*':
+            stack.append(left * right)
+        elif op == '/':
+            stack.append(left / right)
+
+    return stack[0]
+
+def execute(instructions):
+    variables = {}
+    for instruction in instructions:
+        if instruction['type'] == 'assign':
+            var_name = instruction['var']
+            expr = instruction['expr']
+            value = eval_expression(expr, variables)
+            variables[var_name] = value
+        elif instruction['type'] == 'print':
+            expr = instruction['expr']
+            value = eval_expression(expr, variables)
+            print(value)
+        elif instruction['type'] == 'if':
+            condition = eval_expression(instruction['condition'], variables)
+            if condition:
+                # Execute the instructions in the if block
+                for token in instruction['if_block']:
+                    if token[0] == 'PRINT':
+                        # Handle printing inside the if block
+                        value = eval_expression(token[1:], variables)
+                        print(value)
+                    # Add more handlers as needed for assignments, etc.
+            elif 'else_block' in instruction:
+                for token in instruction['else_block']:
+                    if token[0] == 'PRINT':
+                        value = eval_expression(token[1:], variables)
+                        print(value)
+                    # Handle other types in else block if needed
+
+def run_from_file(filename):
+    with open(filename, 'r', encoding='utf-8') as file:
+        code = file.read()
+    
+    tokens = tokenize(code)
+    instructions = parse(tokens)
+    execute(instructions)
+
+# Example usage
+run_from_file('program.txt')
